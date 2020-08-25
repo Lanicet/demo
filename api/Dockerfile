@@ -5,7 +5,7 @@
 
 # https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
 ARG PHP_VERSION=7.4
-ARG OPENRESTY_VERSION=1.15.8.3
+ARG NGINX_VERSION=1.19.2
 ARG VARNISH_VERSION=6.4
 
 
@@ -19,8 +19,7 @@ RUN apk add --no-cache \
 		file \
 		gettext \
 		git \
-		openssl \
-	;
+		openssl
 
 ARG APCU_VERSION=5.1.18
 RUN set -eux; \
@@ -31,7 +30,6 @@ RUN set -eux; \
 		postgresql-dev \
 		zlib-dev \
 	; \
-	\
 	docker-php-ext-configure zip; \
 	docker-php-ext-install -j$(nproc) \
 		intl \
@@ -46,7 +44,6 @@ RUN set -eux; \
 		apcu \
 		opcache \
 	; \
-	\
 	runDeps="$( \
 		scanelf --needed --nobanner --format '%n#p' --recursive /usr/local/lib/php/extensions \
 			| tr ',' '\n' \
@@ -54,7 +51,6 @@ RUN set -eux; \
 			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
 	)"; \
 	apk add --no-cache --virtual .api-phpexts-rundeps $runDeps; \
-	\
 	apk del .build-deps
 
 RUN version=$(php -r "echo PHP_MAJOR_VERSION.PHP_MINOR_VERSION;") \
@@ -130,11 +126,20 @@ CMD ["php-fpm"]
 
 # "nginx" stage
 # depends on the "php" stage above
-# The OpenResty distribution of NGINX is only needed for Kubernetes compatiblity (dynamic upstream resolution)
-FROM openresty/openresty:${OPENRESTY_VERSION}-alpine AS api_platform_nginx
+FROM nginx:${NGINX_VERSION}-alpine AS api_platform_nginx
 
-RUN echo -e "env UPSTREAM;\n$(cat /usr/local/openresty/nginx/conf/nginx.conf)" > /usr/local/openresty/nginx/conf/nginx.conf
-COPY docker/nginx/conf.d/default.conf /etc/nginx/conf.d/default.conf
+ENV UPSTREAM=php:9000
+
+COPY docker/nginx/conf.d/default.tmpl /usr/local/etc/nginx/default.tmpl
+
+RUN set -eux; \
+	apk add --no-cache \
+		gettext
+
+COPY docker/nginx/docker-entrypoint.sh /usr/local/bin/docker-entrypoint
+RUN chmod +x /usr/local/bin/docker-entrypoint
+
+ENTRYPOINT ["docker-entrypoint"]
 
 WORKDIR /srv/api/public
 

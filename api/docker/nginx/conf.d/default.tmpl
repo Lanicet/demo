@@ -7,8 +7,7 @@ server {
     }
 
     location ~ ^/index\.php(/|$) {
-        set_by_lua $upstream_host 'return os.getenv("UPSTREAM") or "php:9000"';
-        fastcgi_pass $upstream_host;
+        fastcgi_pass "${UPSTREAM}";
         resolver local=on;
 
         # Bigger buffer size to handle cache invalidation headers expansion

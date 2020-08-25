@@ -2,14 +2,14 @@ version: '3.4'
 
 services:
   php:
-    image: ${CONTAINER_REGISTRY_BASE}/php
+    image: ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/php:${CONTAINER_REGISTRY_TAG:-latest}
     build:
       context: ./api
       target: api_platform_php
       cache_from: &api_cache_from
-        - ${CONTAINER_REGISTRY_BASE}/php
-        - ${CONTAINER_REGISTRY_BASE}/nginx
-        - ${CONTAINER_REGISTRY_BASE}/varnish
+        - ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/php
+        - ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/nginx
+        - ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/varnish
     restart: on-failure
     healthcheck:
       interval: 10s
@@ -25,7 +25,7 @@ services:
       # - ./api/var:/srv/api/var:rw
 
   consumer:
-    image: ${CONTAINER_REGISTRY_BASE}/php
+    image: ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/php:${CONTAINER_REGISTRY_TAG:-latest}
     build:
       context: ./api
       target: api_platform_php
@@ -41,7 +41,7 @@ services:
       # - ./api/var:/srv/api/var:rw
 
   api:
-    image: ${CONTAINER_REGISTRY_BASE}/nginx
+    image: ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/nginx:${CONTAINER_REGISTRY_TAG:-latest}
     build:
       context: ./api
       target: api_platform_nginx
@@ -55,7 +55,7 @@ services:
       - "8080:80"
 
   cache-proxy:
-    image: ${CONTAINER_REGISTRY_BASE}/varnish
+    image: ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/varnish:${CONTAINER_REGISTRY_TAG:-latest}
     build:
       context: ./api
       target: api_platform_varnish
@@ -100,11 +100,11 @@ services:
   client:
     # Use a static website hosting service in production
     # See https://github.com/facebookincubator/create-react-app/blob/master/packages/react-scripts/template/README.md#deployment
-    image: ${CONTAINER_REGISTRY_BASE}/client
+    image: ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/client:${CONTAINER_REGISTRY_TAG:-latest}
     build:
       context: ./client
       cache_from:
-        - ${CONTAINER_REGISTRY_BASE}/client
+        - ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/client
     stdin_open: true # https://github.com/facebook/create-react-app/issues/8688
     env_file:
       - ./client/.env
@@ -118,12 +118,12 @@ services:
   admin:
     # Use a static website hosting service in production
     # See https://github.com/facebookincubator/create-react-app/blob/master/packages/react-scripts/template/README.md#deployment
-    image: ${CONTAINER_REGISTRY_BASE}/admin
+    image: ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/admin:${CONTAINER_REGISTRY_TAG:-latest}
     stdin_open: true # https://github.com/facebook/create-react-app/issues/8688
     build:
       context: ./admin
       cache_from:
-        - ${CONTAINER_REGISTRY_BASE}/admin
+        - ${CONTAINER_REGISTRY_BASE:-quay.io/api-platform}/admin
     env_file:
       - ./admin/.env
     volumes:

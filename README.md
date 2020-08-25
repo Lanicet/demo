@@ -21,15 +21,15 @@ Loading Fixtures
 Deploy on Kubernetes (GCP)
 ==========================
 
-Everything is pre-configured. Edit the `ci/.env` file to set your project parameters, and declare the following secured
-environment variables in your CI:
+Everything is pre-configured through GitHub Actions. Edit the `.github/workflows/deploy.yml` file to set your project
+parameters, and declare the following secured environment variables:
 
- * `PROJECT_ID`: GCP project id (i.e: `api-platform-demo-123456`)
- * `CI_SERVICE_ACCOUNT`: GCP service account
- * `CI_SERVICE_ACCOUNT_KEY`: GCP service account key
- * `CF_API_KEY`: Cloudflare API key
- * `CF_API_EMAIL`: Cloudflare email
-
-**Important: do not check "_Display value in build log_" for security reason!**
+ * `GKE_PROJECT`: GKE project id (i.e: `api-platform-demo-123456`)
+ * `KUBECONFIG`: GKE service account
+ * `GKE_SA_KEY`: GKE service account key
+ * `CLOUDFLARE_API_KEY`: Cloudflare API key
+ * `CLOUDFLARE_API_EMAIL`: Cloudflare email
+ * `BLACKFIRE_SERVER_ID`: Blackfire server id (optional)
+ * `BLACKFIRE_SERVER_TOKEN`: Blackfire server token (optional)
 
 Deployment will be done automatically by the CI.

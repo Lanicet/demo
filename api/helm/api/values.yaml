@@ -17,8 +17,8 @@ php:
   env: prod
   debug: '0'
   secret: ""
-  corsAllowOrigin: "^https?://(.*\\.api-platform\\.com|localhost(?::[0-9]+)?)$"
-  trustedHosts: "^.*\\.api\\-platform\\.com$"
+  corsAllowOrigin: "^https?://demo(-.*)?\\.api-platform\\.com$"
+  trustedHosts: "^demo(-.*)?\\.api\\-platform\\.com$"
   trustedProxies:
     - 103.21.244.0/22
     - 103.22.200.0/22
@@ -37,9 +37,6 @@ php:
     - 10.0.0.0/8
     - 172.16.0.0/12
     - 192.168.0.0/16
-  apiEntrypointScheme: https
-  apiEntrypointHost: demo.api-platform.com
-  apiEntrypointPort: 443
   service:
     type: ClusterIP
     port: 9000
@@ -86,14 +83,9 @@ postgresql:
 # Full configuration: https://github.com/helm/charts/tree/master/stable/mercure
 mercure:
   enabled: true
-  publishUrl: http://mercure/.well-known/mercure
-  subscribeUrl: https://demo-mercure.api-platform.com/.well-known/mercure
   allowAnonymous: "1"
   corsAllowedOrigins: "^https?://.*\\.api-platform\\.com$"
   jwtKey: ""
-  service:
-    type: NodePort
-    port: 80
   ingress:
     enabled: false
     hosts:
@@ -157,7 +149,7 @@ ingress:
 
 blackfire:
   blackfire:
-    enabled: false
+    enabled: true
   image:
     tag: latest
 

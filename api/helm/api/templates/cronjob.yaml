@@ -92,18 +92,8 @@ spec:
                     secretKeyRef:
                       name: {{ $fullName }}
                       key: jwt-passphrase
-                - name: API_ENTRYPOINT_SCHEME
-                  valueFrom:
-                    configMapKeyRef:
-                      name: {{ $fullName }}
-                      key: api-entrypoint-scheme
                 - name: API_ENTRYPOINT_HOST
                   valueFrom:
                     configMapKeyRef:
                       name: {{ $fullName }}
                       key: api-entrypoint-host
-                - name: API_ENTRYPOINT_PORT
-                  valueFrom:
-                    configMapKeyRef:
-                      name: {{ $fullName }}
-                      key: api-entrypoint-port

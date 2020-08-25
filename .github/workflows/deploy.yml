@@ -1,0 +1,260 @@
+# Check documentation at https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions
+name: Deploy
+
+on:
+  pull_request: ~
+  push:
+    branches:
+      - master
+
+env:
+  COMPOSE_INTERACTIVE_NO_CLI: 1
+  PROJECT_ID: ${{ secrets.GKE_PROJECT }}
+  PROJECT_NAME: api-platform-demo
+  PROJECT_ZONE: europe-west1-c
+  CONTAINER_REGISTRY_BASE: eu.gcr.io/${{ secrets.GKE_PROJECT }}
+  CONTAINER_REGISTRY_TAG: latest
+  DOMAIN: api-platform.com
+  SUBDOMAIN: demo
+  DEFAULT_BRANCH: master
+
+jobs:
+  deploy-api:
+    name: API
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - uses: actions/setup-node@v2-beta
+
+      # Generate the branch name (refs/heads/feature/branch-1 => feature-branch-1)
+      - name: Inject slug/short variables
+        uses: rlespinasse/github-slug-action@v2.x
+
+      - name: Generate environment variables
+        if: env.GITHUB_REF_SLUG_URL == env.DEFAULT_BRANCH
+        run: |-
+          echo "::set-env name=API_HOST::${{ env.SUBDOMAIN }}.${{ env.DOMAIN }}"
+          echo "::set-env name=MERCURE_HOST::${{ env.SUBDOMAIN }}-mercure.${{ env.DOMAIN }}"
+          echo "::set-env name=ADMIN_HOST::${{ env.SUBDOMAIN }}-admin.${{ env.DOMAIN }}"
+          echo "::set-env name=CLIENT_HOST::${{ env.SUBDOMAIN }}-client.${{ env.DOMAIN }}"
+          echo "::set-env name=CONTAINER_REGISTRY_TAG::latest"
+
+      - name: Generate environment variables
+        if: env.GITHUB_REF_SLUG_URL != env.DEFAULT_BRANCH
+        run: |-
+          echo "::set-env name=API_HOST::${{ env.SUBDOMAIN }}-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=MERCURE_HOST::${{ env.SUBDOMAIN }}-mercure-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=ADMIN_HOST::${{ env.SUBDOMAIN }}-admin-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=CLIENT_HOST::${{ env.SUBDOMAIN }}-client-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=CONTAINER_REGISTRY_TAG::${{ env.GITHUB_SHA_SHORT }}"
+
+      - name: Generate Mercure JWT
+        run: |-
+          npm install --no-package-lock "@clarketm/jwt-cli"
+          export MERCURE_JWT_KEY=$(openssl rand -base64 32)
+          export MERCURE_JWT_SECRET=$(npx jwt sign --noCopy --expiresIn "100 years" '{"mercure": {"publish": ["*"]}}' "$MERCURE_JWT_KEY")
+          echo "::add-mask::$MERCURE_JWT_KEY"
+          echo "::add-mask::$MERCURE_JWT_SECRET"
+          echo "::set-env name=MERCURE_JWT_KEY::$MERCURE_JWT_KEY"
+          echo "::set-env name=MERCURE_JWT_SECRET::$MERCURE_JWT_SECRET"
+
+      - name: Generate authentication JWT
+        run: |-
+          export JWT_PASSPHRASE=$(openssl rand -base64 32)
+          export JWT_SECRET_KEY=$(openssl genpkey -pass file:<(echo "$JWT_PASSPHRASE") -aes256 -algorithm rsa -pkeyopt rsa_keygen_bits:4096)
+          export JWT_PUBLIC_KEY=$(openssl pkey -in <(echo "$JWT_SECRET_KEY") -passin file:<(echo "$JWT_PASSPHRASE") -pubout)
+          echo "::add-mask::$JWT_PASSPHRASE"
+          echo "::add-mask::$JWT_SECRET_KEY"
+          echo "::add-mask::$JWT_PUBLIC_KEY"
+          echo "::set-env name=JWT_PASSPHRASE::$JWT_PASSPHRASE"
+          echo "::set-env name=JWT_SECRET_KEY::$JWT_SECRET_KEY"
+          echo "::set-env name=JWT_PUBLIC_KEY::$JWT_PUBLIC_KEY"
+
+      - name: Generate database password
+        run: |-
+          export DATABASE_PASSWORD=$(openssl rand -base64 32)
+          echo "::add-mask::$DATABASE_PASSWORD"
+          echo "::set-env name=DATABASE_PASSWORD::$DATABASE_PASSWORD"
+
+      # Setup gcloud CLI
+      - uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+        with:
+          version: '290.0.1'
+          service_account_key: ${{ secrets.GKE_SA_KEY }}
+          project_id: ${{ secrets.GKE_PROJECT }}
+
+      # Configure Docker to use the gcloud command-line tool as a credential helper for authentication
+      - run: gcloud --quiet auth configure-docker
+
+      # Get the GKE credentials so we can deploy to the cluster
+      - run: gcloud container clusters get-credentials $PROJECT_NAME --zone $PROJECT_ZONE
+
+      - name: Lint Helm
+        uses: WyriHaximus/github-action-helm3@v2
+        with:
+          exec: helm lint ./api/helm/api/
+
+      - name: Build and push the Docker images
+        run: |-
+          docker-compose pull --ignore-pull-failures
+          docker-compose build php api cache-proxy
+          docker-compose push php api cache-proxy
+
+      - name: Deploy API
+        uses: WyriHaximus/github-action-helm3@v2.0
+        with:
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          exec: |-
+            helm dependency update ./api/helm/api
+            helm upgrade ${{ env.GITHUB_SHA_SHORT }} ./api/helm/api \
+              --install \
+              --wait \
+              --create-namespace
+              --namespace=${{ env.GITHUB_REF_SLUG_URL }}
+              --set php.image.repository=$CONTAINER_REGISTRY_BASE/php,php.image.tag=${{ env.CONTAINER_REGISTRY_TAG }} \
+              --set php.mercure.jwtSecret=${{ env.MERCURE_JWT_SECRET }} \
+              --set php.jwt.secretKey="${{ env.JWT_SECRET_KEY }}" \
+              --set php.jwt.publicKey="${{ env.JWT_PUBLIC_KEY }}" \
+              --set php.jwt.passphrase="${{ env.JWT_PASSPHRASE }}" \
+              --set mercure.jwtKey=${{ env.MERCURE_JWT_KEY }} \
+              --set mercure.corsAllowedOrigins="https://${{ env.CLIENT_HOST }} https://${{ env.ADMIN_HOST }}" \
+              --set ingress.hosts[0].host=${{ env.API_HOST }} \
+              --set ingress.hosts[0].paths[0]=/ \
+              --set ingress.hosts[1].host=${{ env.MERCURE_HOST }} \
+              --set ingress.hosts[1].paths[0]=/ \
+              --set nginx.image.repository=$CONTAINER_REGISTRY_BASE/nginx,nginx.image.tag=${{ env.CONTAINER_REGISTRY_TAG }} \
+              --set varnish.image.repository=$CONTAINER_REGISTRY_BASE/varnish,varnish.image.tag=${{ env.CONTAINER_REGISTRY_TAG }} \
+              --set blackfire.blackfire.server_id=${{ secrets.BLACKFIRE_SERVER_ID }} \
+              --set blackfire.blackfire.server_token=${{ secrets.BLACKFIRE_SERVER_TOKEN }} \
+              --set postgresql.postgresqlPassword=${{ env.DATABASE_PASSWORD }} \
+              --set external-dns.cloudflare.apiKey=${{ secrets.CLOUDFLARE_API_KEY }} \
+              --set external-dns.cloudflare.email=${{ secrets.CLOUDFLARE_API_EMAIL }}
+
+      - name: Reset fixtures
+        run: |-
+          kubectl rollout status deployment/${{ env.GITHUB_REF_SLUG_URL }}
+          kubectl get services -o wide
+          kubectl exec -it $(kubectl get pods -l app.kubernetes.io/name=api-php -o jsonpath="{.items[0].metadata.name}") \
+            -- sh -c 'APP_ENV=dev composer install -n --no-scripts && bin/console doctrine:schema:update --force -e prod && bin/console hautelook:fixtures:load -n -e dev && APP_ENV=prod composer --no-dev install --classmap-authoritative && exit 0'
+
+      - uses: mshick/add-pr-comment@v1
+        with:
+          message: |
+            API successfully deployed at https://${{ env.API_HOST }}
+            Mercure successfully deployed at https://${{ env.MERCURE_HOST }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          repo-token-user-login: 'github-actions[bot]'
+
+  deploy-admin:
+    name: Admin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - uses: actions/setup-node@v2-beta
+
+      # Generate the branch name (refs/heads/feature/branch-1 => feature-branch-1)
+      - name: Inject slug/short variables
+        uses: rlespinasse/github-slug-action@v2.x
+
+      - name: Generate environment variables
+        if: env.GITHUB_REF_SLUG_URL == env.DEFAULT_BRANCH
+        run: |-
+          echo "::set-env name=API_HOST::${{ env.SUBDOMAIN }}.${{ env.DOMAIN }}"
+          echo "::set-env name=ADMIN_HOST::${{ env.SUBDOMAIN }}-admin.${{ env.DOMAIN }}"
+
+      - name: Generate environment variables
+        if: env.GITHUB_REF_SLUG_URL != env.DEFAULT_BRANCH
+        run: |-
+          echo "::set-env name=API_HOST::${{ env.SUBDOMAIN }}-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=ADMIN_HOST::${{ env.SUBDOMAIN }}-admin-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+
+      # Setup gcloud CLI
+      - uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+        with:
+          version: '290.0.1'
+          service_account_key: ${{ secrets.GKE_SA_KEY }}
+          project_id: ${{ secrets.GKE_PROJECT }}
+
+      - name: Build admin
+        env:
+          REACT_APP_API_ENTRYPOINT: https://${{ env.API_HOST }}
+        working-directory: admin
+        run: |-
+          yarn install
+          yarn build --environment=prod
+
+      - name: Deploy admin
+        run: |-
+          gsutil mb -p $PROJECT_ID -l eu gs://${{ env.ADMIN_HOST }} || echo "Admin bucket exists"
+          gsutil rsync -R admin/build gs://${{ env.ADMIN_HOST }}
+          gsutil web set -m index.html -e index.html gs://${{ env.ADMIN_HOST }}
+          gsutil iam ch allUsers:objectViewer gs://${{ env.ADMIN_HOST }}
+          .github/workflows/bin/flarectl dns c --zone=${{ env.DOMAIN }} --name=${{ env.ADMIN_HOST }} --type=CNAME --content=c.storage.googleapis.com --proxy
+
+      - uses: mshick/add-pr-comment@v1
+        with:
+          message: Admin successfully deployed at https://${{ env.ADMIN_HOST }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          repo-token-user-login: 'github-actions[bot]'
+
+  deploy-client:
+    name: Client
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - uses: actions/setup-node@v2-beta
+
+      # Generate the branch name (refs/heads/feature/branch-1 => feature-branch-1)
+      - name: Inject slug/short variables
+        uses: rlespinasse/github-slug-action@v2.x
+
+      - name: Generate environment variables
+        if: env.GITHUB_REF_SLUG_URL == env.DEFAULT_BRANCH
+        run: |-
+          echo "::set-env name=API_HOST::${{ env.SUBDOMAIN }}.${{ env.DOMAIN }}"
+          echo "::set-env name=ADMIN_HOST::${{ env.SUBDOMAIN }}-admin.${{ env.DOMAIN }}"
+          echo "::set-env name=CLIENT_HOST::${{ env.SUBDOMAIN }}-client.${{ env.DOMAIN }}"
+
+      - name: Generate environment variables
+        if: env.GITHUB_REF_SLUG_URL != env.DEFAULT_BRANCH
+        run: |-
+          echo "::set-env name=API_HOST::${{ env.SUBDOMAIN }}-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=ADMIN_HOST::${{ env.SUBDOMAIN }}-admin-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+          echo "::set-env name=CLIENT_HOST::${{ env.SUBDOMAIN }}-client-${{ env.GITHUB_REF_SLUG_URL }}.${{ env.DOMAIN }}"
+
+      # Setup gcloud CLI
+      - uses: GoogleCloudPlatform/github-actions/setup-gcloud@master
+        with:
+          version: '290.0.1'
+          service_account_key: ${{ secrets.GKE_SA_KEY }}
+          project_id: ${{ secrets.GKE_PROJECT }}
+
+      - name: Build client
+        env:
+          REACT_APP_ADMIN_HOST_HTTPS: https://${{ env.ADMIN_HOST }}
+          REACT_APP_API_CACHED_HOST_HTTPS: https://${{ env.API_HOST }}
+          REACT_APP_API_ENTRYPOINT: https://${{ env.API_HOST }}
+        working-directory: client
+        run: |-
+          yarn install
+          yarn build --environment=prod
+
+      - name: Deploy CLIENT
+        run: |-
+          gsutil mb -p $PROJECT_ID -l eu gs://${{ env.CLIENT_HOST }} || echo "Client bucket exists"
+          gsutil rsync -R client/build gs://${{ env.CLIENT_HOST }}
+          gsutil web set -m index.html -e index.html gs://${{ env.CLIENT_HOST }}
+          gsutil iam ch allUsers:objectViewer gs://${{ env.CLIENT_HOST }}
+          .github/workflows/bin/flarectl dns c --zone=${{ env.DOMAIN }} --name=${{ env.CLIENT_HOST }} --type=CNAME --content=c.storage.googleapis.com --proxy
+
+      - uses: mshick/add-pr-comment@v1
+        with:
+          message: Client successfully deployed at https://${{ env.CLIENT_HOST }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          repo-token-user-login: 'github-actions[bot]'
